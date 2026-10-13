@@ -52,7 +52,7 @@ main { padding: 0 16px; }
 .target-box:focus-within, input.small:focus { outline: 2px solid var(--red-text); outline-offset: 1px; }
 .unit-tag { font-size: .8rem; color: var(--muted); letter-spacing: .15em; }
 
-.quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+.quick { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 12px; }
 .btn {
   background: var(--panel); border: 0; border-radius: 8px; min-height: 48px; min-width: 44px; cursor: pointer;
   font-weight: 700; font-size: 1rem; touch-action: manipulation; user-select: none; -webkit-tap-highlight-color: transparent;
@@ -203,8 +203,47 @@ var MAX_TARGET = { kg: 1000, lb: 2200 };
 
 function freshPlates(unit) { return PLATE_SETS[unit].plates.map(function (p) { return Object.assign({}, p); }); }
 
-/* ---------- state (memory only, nothing is persisted) ---------- */
+/* ---------- state ---------- */
+var STORE_KEY = 'plateCalc.v1';
 var state = { unit: 'kg', target: 100, bar: 20, plates: freshPlates('kg'), modalOpen: false };
+var other = { bar: PLATE_SETS.lb.bar, plates: freshPlates('lb') };   // saved inventory of the unit not in use
+
+function otherUnit() { return state.unit === 'kg' ? 'lb' : 'kg'; }
+
+/* Persistence is best-effort: storage can be missing or blocked. */
+function save() {
+  try {
+    var o = {};
+    o[state.unit] = { bar: state.bar, plates: state.plates };
+    o[otherUnit()] = other;
+    localStorage.setItem(STORE_KEY, JSON.stringify({ unit: state.unit, target: state.target, inv: o }));
+  } catch (e) {}
+}
+function cleanPlates(unit, saved) {
+  var out = freshPlates(unit);
+  if (!Array.isArray(saved)) return out;
+  out.forEach(function (p) {
+    var m = saved.filter(function (q) { return q && q.weight === p.weight; })[0];
+    if (!m) return;
+    p.limited = m.limited !== false;
+    var n = Math.floor(Number(m.pairs));
+    p.pairs = isFinite(n) ? Math.min(MAX_PAIRS, Math.max(0, n)) : 1;
+  });
+  return out;
+}
+function load() {
+  try {
+    var d = JSON.parse(localStorage.getItem(STORE_KEY));
+    if (!d || !PLATE_SETS[d.unit]) return;
+    var num = function (v, def) { v = Number(v); return isFinite(v) && v >= 0 ? v : def; };
+    state.unit = d.unit;
+    state.target = num(d.target, state.target);
+    var cur = (d.inv || {})[state.unit] || {}, oth = (d.inv || {})[otherUnit()] || {};
+    state.bar = num(cur.bar, PLATE_SETS[state.unit].bar);
+    state.plates = cleanPlates(state.unit, cur.plates);
+    other = { bar: num(oth.bar, PLATE_SETS[otherUnit()].bar), plates: cleanPlates(otherUnit(), oth.plates) };
+  } catch (e) {}
+}
 
 /* ---------- pure logic ---------- */
 function gcd(a, b) { while (b) { var t = a % b; a = b; b = t; } return a; }
@@ -364,6 +403,7 @@ function fillSide(el, weights, mirror) {
 }
 
 function render() {
+  save();
   var r = compute(state);
   drawBar(r.plates);
   // left reads as drawn (lightest outermost on the left, heaviest at the centre)
@@ -394,7 +434,7 @@ function setTarget(v) {
   render();
 }
 
-[5, 10, 20, 100].forEach(function (n) {
+[1, 5, 10, 20, 100].forEach(function (n) {
   [['quickPlus', n, '+'], ['quickMinus', -n, '−']].forEach(function (c) {
     var b = document.createElement('button');
     b.type = 'button'; b.className = 'btn';
@@ -410,9 +450,11 @@ document.querySelectorAll('.seg button').forEach(function (b) {
   b.addEventListener('click', function () {
     var u = b.getAttribute('data-unit');
     if (u === state.unit) return;
+    var prev = { bar: state.bar, plates: state.plates };
     state.unit = u;
-    state.bar = PLATE_SETS[u].bar;
-    state.plates = freshPlates(u);
+    state.bar = other.bar;
+    state.plates = other.plates;
+    other = prev;
     $('barw').value = String(state.bar);
     document.querySelectorAll('.seg button').forEach(function (x) {
       x.setAttribute('aria-pressed', String(x === b));
@@ -503,6 +545,12 @@ if (navigator.onLine) {
   document.head.appendChild(l);
 }
 
+load();
+$('target').value = String(state.target);
+$('barw').value = String(state.bar);
+document.querySelectorAll('.seg button').forEach(function (x) {
+  x.setAttribute('aria-pressed', String(x.getAttribute('data-unit') === state.unit));
+});
 render();
 </script>
 </body>
